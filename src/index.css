@@ -1,0 +1,373 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    background-color: #05070a;
+    color: #e2e8f0;
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  }
+
+  /* Custom high-tech scrollbar */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #090d14;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 4px;
+    border: 1px solid rgba(225, 29, 72, 0.2);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #e11d48;
+  }
+}
+
+/* Cosmic grid background pattern */
+.bg-grid-pattern {
+  background-size: 40px 40px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+}
+
+.bg-radial-vignette {
+  background: radial-gradient(circle at 50% 20%, rgba(225, 29, 72, 0.12) 0%, rgba(5, 7, 10, 0.8) 60%, #05070a 100%);
+}
+
+.text-glow {
+  text-shadow: 0 0 15px rgba(225, 29, 72, 0.6), 0 0 30px rgba(225, 29, 72, 0.3);
+}
+
+.border-glow {
+  box-shadow: 0 0 20px rgba(225, 29, 72, 0.15);
+}
+
+.card-glass {
+  background: rgba(14, 20, 32, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.card-glass-hover {
+  transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.card-glass-hover:hover {
+  border-color: rgba(225, 29, 72, 0.4);
+  box-shadow: 0 10px 30px -10px rgba(225, 29, 72, 0.25);
+  transform: translateY(-3px);
+}
+
+/* ========================================================
+   Stage 2.5: Scoped Certificate Print & PDF Export Rules
+   Isolates only the certificate canvas during window.print()
+   ======================================================== */
+@media print {
+  @page {
+    size: A4 landscape;
+    margin: 8mm;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #0f172a !important;
+    font-size: 12pt;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  /* Specifically hide website navigation, main body sections, footers, and modal chrome */
+  nav,
+  header,
+  footer,
+  main,
+  .no-print,
+  #certificate-modal-root > .no-print,
+  #certificate-modal-card > .no-print {
+    display: none !important;
+  }
+
+  /* Ensure modal root does not constrain or darken printout */
+  #certificate-modal-root {
+    position: static !important;
+    inset: auto !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    min-height: auto !important;
+  }
+
+  #certificate-modal-card {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+
+  /* Format the printable A4 landscape certificate canvas cleanly */
+  #printable-certificate-canvas {
+    display: block !important;
+    position: relative !important;
+    background: #fffdf9 !important;
+    border: 5px solid #9f1239 !important;
+    border-radius: 14px !important;
+    box-shadow: none !important;
+    padding: 8px !important;
+    margin: 0 auto !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    color: #0f172a !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  #printable-certificate-canvas * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Guarantee 3-column A4 landscape structure regardless of print viewport width */
+  #printable-certificate-canvas .cert-main-grid {
+    display: grid !important;
+    grid-template-columns: repeat(12, minmax(0, 1fr)) !important;
+    gap: 14px !important;
+    align-items: stretch !important;
+  }
+
+  #printable-certificate-canvas .cert-main-grid > .md\:col-span-4 {
+    grid-column: span 4 / span 4 !important;
+  }
+
+  #printable-certificate-canvas .cert-main-grid > .md\:col-span-5 {
+    grid-column: span 5 / span 5 !important;
+  }
+
+  #printable-certificate-canvas .cert-main-grid > .md\:col-span-3 {
+    grid-column: span 3 / span 3 !important;
+  }
+
+  #printable-certificate-canvas .cert-photo-frame {
+    min-height: 220px !important;
+    max-height: 280px !important;
+  }
+
+  #printable-certificate-canvas h1 {
+    font-size: 20pt !important;
+    line-height: 1.15 !important;
+  }
+
+  #printable-certificate-canvas h2 {
+    font-size: 18pt !important;
+    line-height: 1.2 !important;
+  }
+}
+
+/* ========================================================
+   Phase 6 Feature 4: Dark-Theme Institutional Partner Tiles
+   Zero white containers; subtle slate-glass surface + high-contrast support
+   ======================================================== */
+.partner-logo-tile {
+  background: rgba(14, 20, 32, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+
+.partner-logo-tile:hover {
+  background: rgba(19, 27, 44, 0.9);
+  border-color: rgba(225, 29, 72, 0.35);
+  transform: translateY(-2px);
+}
+
+.partner-logo-tile:focus-visible,
+.member-directory-card:focus-within {
+  outline: 2px solid #f43f5e;
+  outline-offset: 2px;
+}
+
+.partner-logo-surface {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(51, 65, 85, 0.72) 0%,
+    rgba(30, 41, 59, 0.85) 68%,
+    rgba(15, 23, 42, 0.92) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.partner-logo-surface--deep {
+  background: radial-gradient(
+    ellipse at center,
+    rgba(30, 41, 59, 0.72) 0%,
+    rgba(15, 23, 42, 0.88) 72%,
+    rgba(9, 13, 20, 0.95) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+@media (forced-colors: active) {
+  .partner-logo-tile,
+  .member-directory-card {
+    border: 1px solid CanvasText;
+  }
+
+  .partner-logo-tile:focus-visible {
+    outline: 3px solid Highlight;
+    outline-offset: 3px;
+  }
+}
+
+/* Native modal dialog backdrop & scroll-chain containment (without body scroll locking) */
+dialog.donor-profile-dialog:modal,
+dialog.blood-drop-dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog.donor-profile-dialog::backdrop,
+dialog.blood-drop-dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(2, 6, 23, 0.78);
+  backdrop-filter: blur(4px);
+}
+
+/* ========================================================
+   RED MISSION AI Mascot & Floating Chat Panel Motion
+   Compositor-friendly transforms/opacity with reduced-motion support
+   ======================================================== */
+@keyframes ai-mascot-float {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-7px);
+  }
+}
+
+.ai-mascot-btn {
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), filter 0.25s ease;
+  filter: drop-shadow(0 8px 18px rgba(225, 29, 72, 0.45));
+}
+
+.ai-mascot-btn:hover,
+.ai-mascot-btn:focus-visible {
+  filter: drop-shadow(0 0 24px rgba(244, 63, 94, 0.85));
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-mascot-float {
+    animation: ai-mascot-float 3.6s ease-in-out infinite;
+  }
+
+  .ai-mascot-btn:hover {
+    transform: scale(1.07);
+  }
+
+  .ai-mascot-btn:active {
+    transform: scale(0.97);
+  }
+}
+
+.ai-chat-panel {
+  overscroll-behavior: contain;
+  transition-property: opacity, transform;
+  transition-duration: 0.22s;
+  transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ai-chat-panel[data-state='closed'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.ai-chat-panel[data-state='open'] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .ai-chat-panel[data-state='closed'] {
+    transform: translateY(14px) scale(0.96);
+  }
+
+  .ai-chat-panel[data-state='open'] {
+    transform: translateY(0) scale(1);
+    @starting-style {
+      opacity: 0;
+      transform: translateY(14px) scale(0.96);
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-chat-panel {
+    transition-duration: 0.1s;
+  }
+}
+
+.ai-chat-scroll {
+  overscroll-behavior: contain;
+}
+
+/* ========================================================
+   Lifeline Journey Accordion & Timeline Motion
+   Native <details> smooth intrinsic height expansion with reduced-motion respect
+   ======================================================== */
+.lifeline-details > summary {
+  list-style: none;
+}
+
+.lifeline-details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lifeline-details::details-content {
+  interpolate-size: allow-keywords;
+  overflow: clip;
+  contain: layout;
+}
+
+.lifeline-details:not([open])::details-content {
+  block-size: 0;
+}
+
+.lifeline-details-chevron {
+  transform: rotate(0deg);
+}
+
+.lifeline-details[open] .lifeline-details-chevron {
+  transform: rotate(180deg);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .lifeline-details::details-content {
+    transition: block-size, content-visibility, display;
+    transition-duration: 0.28s;
+    transition-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    transition-behavior: allow-discrete;
+  }
+
+  .lifeline-details-chevron {
+    transition: transform 0.22s ease;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lifeline-details::details-content,
+  .lifeline-details-chevron {
+    transition: none;
+  }
+}

@@ -1,0 +1,89 @@
+# ==========================================
+# RED MISSION — Secure Version Control Ignore
+# ==========================================
+
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Environment Secrets and Configurations
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# Explicitly preserve .env.example
+!.env.example
+
+# Production Build and Bundles
+dist/
+dist-ssr/
+build/
+.vite/
+
+# Database Files, WAL, SHM Journals, and Backups
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+backups/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Logs and Debug Outputs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Temporary Files and System Artifacts
+tmp/
+temp/
+.tmp/
+*.tmp
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE and Workspace Metadata
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Local database files
+server/data/*.db
+server/data/*.db-shm
+server/data/*.db-wal
+
+# Private donor uploads - never commit personal images or medical proofs
+server/storage/selfies/*
+!server/storage/selfies/.gitkeep
+
+server/storage/proofs/*
+!server/storage/proofs/.gitkeep
+
+# Generated Reports and Analytics - preserve directory structure only
+server/storage/reports/*
+!server/storage/reports/.gitkeep
+
+# Scratch Scripts and Ephemeral Test Environments
+scratch/
+
+# Legacy and Timestamped Dashboard Backups
+dashboard-backup-*/
+
+# Historical and Ad-hoc Inline Backup Files
+*.backup
+*.backup-*
+*.phase2-backup
+*.phase*-backup
+*.bak
+
