@@ -1,5 +1,6 @@
 import { getDatabase } from '../database/connection.js';
 import { config } from '../config/env.js';
+import { resolveEffectiveAge } from '../services/donorAvailabilityService.js';
 
 function parseDbDate(str) {
   if (!str) return new Date();
@@ -60,7 +61,7 @@ export function authenticateUser(req, res, next) {
 
   // Fetch user
   const user = db.prepare(`
-    SELECT id, full_name, mobile_number, email, age, blood_group, city, 
+    SELECT id, full_name, mobile_number, email, age, date_of_birth, gender, blood_group, city,
            is_active, is_suspended, created_at 
     FROM users WHERE id = ?
   `).get(session.user_id);
@@ -72,6 +73,9 @@ export function authenticateUser(req, res, next) {
       error: 'Your account is suspended or no longer accessible. Please contact support.'
     });
   }
+
+  // Calculate dynamic effective age
+  user.age = resolveEffectiveAge(user.age, user.date_of_birth);
 
   // Refresh last activity timestamp with ISO string
   const currentIso = new Date().toISOString();
@@ -284,7 +288,7 @@ export function authenticateAny(req, res, next) {
 
       // Fetch user account
       const user = db.prepare(`
-        SELECT id, full_name, mobile_number, email, age, blood_group, city, 
+        SELECT id, full_name, mobile_number, email, age, date_of_birth, gender, blood_group, city,
                is_active, is_suspended, created_at 
         FROM users WHERE id = ?
       `).get(userSession.user_id);
@@ -296,6 +300,9 @@ export function authenticateAny(req, res, next) {
           error: 'User account not found.'
         });
       }
+
+      // Calculate dynamic effective age
+      user.age = resolveEffectiveAge(user.age, user.date_of_birth);
 
       if (!user.is_active || user.is_suspended) {
         return res.status(403).json({

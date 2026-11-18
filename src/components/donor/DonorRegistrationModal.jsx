@@ -18,6 +18,7 @@ import {
   UserCheck
 } from 'lucide-react';
 import { donorApi } from '../../services/api';
+import CalendarDatePicker from '../common/CalendarDatePicker';
 
 export default function DonorRegistrationModal({
   isOpen,
@@ -574,13 +575,14 @@ setStreamActive(true);
 
                 {/* Last Donation Date */}
                 <div className="space-y-1">
-                  <span className="text-slate-400 font-mono text-[11px] block">Last Blood Donation (Optional):</span>
-                  <input
-                    type="date"
+                  <CalendarDatePicker
+                    id="last-donation-date"
+                    name="lastDonationDate"
+                    label="Last Blood Donation (Optional)"
+                    placeholder="Select previous donation date"
                     value={lastDonationDate}
                     max={new Date().toISOString().split('T')[0]}
-                    onChange={(e) => setLastDonationDate(e.target.value)}
-                    className="w-full px-3 py-2 rounded-xl bg-space-900 border border-white/10 text-white font-mono focus:outline-none focus:border-mars-500 text-xs"
+                    onChange={(newVal) => setLastDonationDate(newVal)}
                   />
                 </div>
               </div>

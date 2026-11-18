@@ -185,6 +185,49 @@ export function diffCalendarDays(fromYmd, toYmd) {
 }
 
 /**
+ * Calculate dynamic age from Date of Birth string (YYYY-MM-DD) evaluated in Asia/Kolkata timezone.
+ * Returns null if dobString is invalid or null. Returns -1 if the date is in the future.
+ */
+export function calculateAgeFromDob(dobString, referenceDate = new Date()) {
+  if (!dobString || typeof dobString !== 'string') return null;
+  const parts = parseStrictYmd(dobString.trim());
+  if (!parts) return null;
+
+  const todayIst = getTodayIstDateString(referenceDate);
+  if (todayIst < dobString.trim()) {
+    return -1; // Future date indicator
+  }
+
+  const currParts = parseStrictYmd(todayIst);
+  if (!currParts) return null;
+
+  let age = currParts.year - parts.year;
+  if (currParts.month < parts.month || (currParts.month === parts.month && currParts.day < parts.day)) {
+    age -= 1;
+  }
+  return age;
+}
+
+/**
+ * Resolves the effective age of a user:
+ * Uses calculated age if date_of_birth is present and valid;
+ * Falls back to legacy numeric age column if date_of_birth is null/undefined.
+ */
+export function resolveEffectiveAge(storedAge, dateOfBirth, referenceDate = new Date()) {
+  if (dateOfBirth && typeof dateOfBirth === 'string' && dateOfBirth.trim()) {
+    const computed = calculateAgeFromDob(dateOfBirth.trim(), referenceDate);
+    if (computed !== null && computed >= 0) {
+      return computed;
+    }
+  }
+  if (storedAge !== null && storedAge !== undefined && storedAge !== '') {
+    const num = Number(storedAge);
+    if (!Number.isNaN(num)) return num;
+  }
+  return null;
+}
+
+/**
  * Pure policy evaluation combining account status, emergency opt-in, age bounds, and 3-month verified cooldown.
  */
 export function evaluateDonorAvailability({
@@ -450,6 +493,7 @@ export function getDonorAvailabilityStatus(db, userId, { referenceDate = new Dat
         u.is_active,
         u.is_suspended,
         u.age,
+        u.date_of_birth,
         d.user_id AS donor_profile_user_id,
         d.is_available_for_emergency,
         d.last_donation_date,
@@ -466,12 +510,13 @@ export function getDonorAvailabilityStatus(db, userId, { referenceDate = new Dat
 
   const verifiedMap = getVerifiedDonationMap(db, [userId]);
   const latestVerified = verifiedMap.get(userId) || null;
+  const effectiveAge = resolveEffectiveAge(row.age, row.date_of_birth, referenceDate);
 
   const availability = evaluateDonorAvailability({
     hasDonorProfile: Boolean(row.donor_profile_user_id),
     isActive: row.is_active === 1,
     isSuspended: row.is_suspended === 1,
-    age: row.age,
+    age: effectiveAge,
     isAvailableForEmergency: row.donor_profile_user_id ? row.is_available_for_emergency === 1 : true,
     latestVerifiedDonationDate: latestVerified ? latestVerified.donationDateYmd : null,
     selfReportedLastDonationDate: row.last_donation_date || null,
@@ -480,6 +525,7 @@ export function getDonorAvailabilityStatus(db, userId, { referenceDate = new Dat
 
   return {
     userId,
+    age: effectiveAge,
     verifiedDonation: latestVerified,
     ...availability
   };
@@ -507,11 +553,17 @@ export function getBulkDonorAvailability(db, donorRows = [], { referenceDate = n
         ? Boolean(row.has_donor_profile)
         : row.is_available_for_emergency !== undefined || row.donor_profile_user_id !== undefined;
 
+    const effectiveAge = resolveEffectiveAge(
+      row.age !== undefined ? row.age : null,
+      row.date_of_birth || row.donor_dob || null,
+      referenceDate
+    );
+
     const evaluated = evaluateDonorAvailability({
       hasDonorProfile: hasProfile,
       isActive: row.is_active === undefined ? true : row.is_active === 1 || row.is_active === true,
       isSuspended: row.is_suspended === 1 || row.is_suspended === true,
-      age: row.age !== undefined ? row.age : null,
+      age: effectiveAge,
       isAvailableForEmergency:
         row.is_available_for_emergency === undefined
           ? true
@@ -523,6 +575,7 @@ export function getBulkDonorAvailability(db, donorRows = [], { referenceDate = n
 
     availabilityMap.set(uid, {
       userId: uid,
+      age: effectiveAge,
       verifiedDonation: latestVerified,
       ...evaluated
     });

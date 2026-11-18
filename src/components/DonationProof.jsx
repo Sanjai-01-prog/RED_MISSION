@@ -18,6 +18,7 @@ import {
   Eye
 } from 'lucide-react';
 import { INITIAL_VERIFIED_SUBMISSIONS } from '../data/missionData';
+import CalendarDatePicker from './common/CalendarDatePicker';
 
 export default function DonationProof({ onNewSubmission, onViewCertificate }) {
   const [formData, setFormData] = useState({
@@ -398,16 +399,14 @@ export default function DonationProof({ onNewSubmission, onViewCertificate }) {
 
                   {/* Donation Date */}
                   <div className="space-y-1.5">
-                    <label className="block text-xs font-mono uppercase tracking-wider text-slate-300">
-                      Date of Donation <span className="text-mars-400">*</span>
-                    </label>
-                    <input
-                      type="date"
+                    <CalendarDatePicker
+                      id="donation-date"
                       name="donationDate"
+                      label="Date of Donation"
+                      placeholder="Select donation date"
                       value={formData.donationDate}
-                      onChange={handleChange}
                       max={new Date().toISOString().split('T')[0]}
-                      className="w-full px-4 py-2.5 rounded-xl bg-space-900 border border-white/10 text-sm text-white focus:outline-none focus:border-mars-500 transition-colors cursor-pointer"
+                      onChange={(newVal) => setFormData(prev => ({ ...prev, donationDate: newVal }))}
                       required
                     />
                   </div>

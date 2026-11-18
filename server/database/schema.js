@@ -5,6 +5,7 @@ import { applyStage25Migration } from './migrations/stage_2_5_emergency_workflow
 import { applyStage26Migration } from './migrations/stage_2_6_pending_registrations.js';
 import { applyStage33Migration } from './migrations/stage_3_3_user_consents.js';
 import { applyStage34Migration } from './migrations/stage_3_4_emergency_lifecycle.js';
+import { applyStage35Migration } from './migrations/stage_3_5_dob_and_gender.js';
 
 export function initializeDatabaseSchema() {
   const db = getDatabase();
@@ -17,6 +18,8 @@ export function initializeDatabaseSchema() {
       mobile_number TEXT UNIQUE NOT NULL,
       email TEXT UNIQUE NOT NULL,
       age INTEGER NOT NULL,
+      date_of_birth TEXT NULL,
+      gender TEXT NULL,
       blood_group TEXT NOT NULL,
       city TEXT NOT NULL,
       password_hash TEXT NOT NULL,
@@ -314,6 +317,9 @@ export function initializeDatabaseSchema() {
 
   // Apply Stage 3.4 migration idempotently
   applyStage34Migration(db);
+
+  // Apply Stage 3.5 migration idempotently
+  applyStage35Migration(db);
 
   // Seed default admin roles if not yet seeded
   seedAdminRoles(db);

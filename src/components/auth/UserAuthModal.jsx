@@ -23,11 +23,12 @@ import {
   Upload,
   Check
 } from 'lucide-react';
-import { userApi } from '../../services/api';
+import { userApi, authApi } from '../../services/api';
 import { validateAndPrepareDonorPhoto } from '../../utils/donorPhotoValidator';
 import LiveDateTime from '../shared/LiveDateTime';
 import { RED_MISSION_TERMS, TERMS_VERSION, PRIVACY_POLICY_VERSION } from '../../data/termsAndPrivacyData';
 import PrivacyPolicyModal from '../common/PrivacyPolicyModal';
+import CalendarDatePicker, { calculateAgeFromDob, formatDisplayDate } from '../common/CalendarDatePicker';
 
 export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', onAuthSuccess }) {
   const [mode, setMode] = useState(initialMode); // 'login' | 'register' | 'forgot'
@@ -35,6 +36,7 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const [otpEnabled, setOtpEnabled] = useState(false);
 
   // Terms and Privacy modal state
   const [termsAccepted, setTermsAccepted] = useState(false);
@@ -52,6 +54,8 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
     fullName: '',
     mobileNumber: '',
     email: '',
+    dob: '',
+    gender: 'Male',
     age: '',
     bloodGroup: 'O+',
     city: ''
@@ -95,6 +99,12 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
     if (!isOpen) {
       setTermsAccepted(false);
       setIsPrivacyModalOpen(false);
+    } else {
+      authApi.getConfig().then((res) => {
+        if (res && typeof res.otpEnabled === 'boolean') {
+          setOtpEnabled(res.otpEnabled);
+        }
+      }).catch(() => {});
     }
   }, [initialMode, isOpen]);
 
@@ -265,10 +275,31 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
     setRegSelfieImage(result.dataUrl);
   };
 
-  // Step 1: Submit 6 details + Mandatory Donor Photo + Consent + Terms Acceptance
+  // Step 1: Submit details + Mandatory Donor Photo + Consent + Terms Acceptance
   const handleRegStep1 = async (e) => {
     e.preventDefault();
     setErrorMessage('');
+
+    if (!regData.dob) {
+      setErrorMessage('Please select your Date of Birth.');
+      return;
+    }
+
+    const calculatedAge = calculateAgeFromDob(regData.dob);
+    if (calculatedAge === null || calculatedAge === -1) {
+      setErrorMessage('Please select a valid past Date of Birth.');
+      return;
+    }
+
+    if (calculatedAge < 18 || calculatedAge > 65) {
+      setErrorMessage('Voluntary blood donors must be aged between 18 and 65 years.');
+      return;
+    }
+
+    if (!regData.gender) {
+      setErrorMessage('Please select your gender.');
+      return;
+    }
 
     if (!regSelfieImage) {
       setErrorMessage('Please upload or capture your mandatory donor profile photograph before proceeding.');
@@ -282,6 +313,13 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
 
     if (!termsAccepted) {
       setErrorMessage('You must review and accept the RED MISSION Terms & Conditions to proceed.');
+      return;
+    }
+
+    // Direct registration: if OTP is disabled, proceed directly to Password Creation (Step 4)
+    if (!otpEnabled) {
+      stopCameraStream();
+      setRegStep(4);
       return;
     }
 
@@ -364,7 +402,22 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
     setErrorMessage('');
     setLoading(true);
 
-    const res = await userApi.registerComplete(regToken, regPassword, regConfirmPassword);
+    let res;
+    if (otpEnabled && regToken) {
+      res = await userApi.registerComplete(regToken, regPassword, regConfirmPassword);
+    } else {
+      res = await userApi.registerDirect({
+        ...regData,
+        password: regPassword,
+        confirmPassword: regConfirmPassword,
+        selfieImage: regSelfieImage,
+        photoConsent: true,
+        termsAccepted: true,
+        termsVersion: TERMS_VERSION,
+        privacyPolicyAccepted: true,
+        privacyPolicyVersion: PRIVACY_POLICY_VERSION
+      });
+    }
     setLoading(false);
 
     if (res.success) {
@@ -637,20 +690,37 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
             <div>
               <div className="flex items-center justify-between text-[11px] font-mono text-slate-400 mb-2">
                 <span className="text-mars-400 font-bold uppercase">
-                  Step {regStep} of 6: {
-                    regStep === 1 ? 'Personal Details' :
-                    regStep === 2 ? 'Mobile Verification' :
-                    regStep === 3 ? 'Email Verification' :
-                    regStep === 4 ? 'Create Password' :
-                    regStep === 5 ? 'Confirm Details' : 'Account Activated'
+                  {otpEnabled ? (
+                    `Step ${regStep} of 6: ${
+                      regStep === 1 ? 'Personal Details' :
+                      regStep === 2 ? 'Mobile Verification' :
+                      regStep === 3 ? 'Email Verification' :
+                      regStep === 4 ? 'Create Password' :
+                      regStep === 5 ? 'Confirm Details' : 'Account Activated'
+                    }`
+                  ) : (
+                    `Step ${regStep === 1 ? 1 : regStep === 4 ? 2 : regStep === 5 ? 3 : 4} of 4: ${
+                      regStep === 1 ? 'Personal Details & Photo' :
+                      regStep === 4 ? 'Create Password' :
+                      regStep === 5 ? 'Confirm Details' : 'Account Activated'
+                    }`
+                  )}
+                </span>
+                <span>
+                  {otpEnabled
+                    ? `${Math.round((regStep / 6) * 100)}%`
+                    : `${Math.round(((regStep === 1 ? 1 : regStep === 4 ? 2 : regStep === 5 ? 3 : 4) / 4) * 100)}%`
                   }
                 </span>
-                <span>{Math.round((regStep / 6) * 100)}%</span>
               </div>
               <div className="w-full h-1.5 bg-space-900 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-mars-600 to-mars-flame transition-all duration-300"
-                  style={{ width: `${(regStep / 6) * 100}%` }}
+                  style={{
+                    width: otpEnabled
+                      ? `${(regStep / 6) * 100}%`
+                      : `${((regStep === 1 ? 1 : regStep === 4 ? 2 : regStep === 5 ? 3 : 4) / 4) * 100}%`
+                  }}
                 ></div>
               </div>
             </div>
@@ -712,22 +782,43 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
                   </div>
 
                   <div className="space-y-1">
-                    <label htmlFor="reg-age" className="block text-[11px] font-mono uppercase text-slate-300">
-                      Age (18 - 65) <span className="text-mars-400">*</span>
-                    </label>
-                    <input
-                      id="reg-age"
-                      name="age"
-                      type="number"
-                      inputMode="numeric"
-                      min="18"
-                      max="65"
-                      value={regData.age}
-                      onChange={(e) => setRegData({ ...regData, age: e.target.value })}
-                      placeholder="e.g. 25"
-                      className="w-full px-3 py-2 rounded-xl bg-space-900 border border-white/10 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-mars-500"
+                    <CalendarDatePicker
+                      id="reg-dob"
+                      name="dob"
+                      label="Date of Birth"
+                      placeholder="Select DOB"
+                      mode="dob"
+                      value={regData.dob}
+                      max={new Date().toISOString().split('T')[0]}
+                      onChange={(newVal, meta) => {
+                        setRegData({
+                          ...regData,
+                          dob: newVal,
+                          age: meta.age !== null && meta.age >= 0 ? meta.age : ''
+                        });
+                        if (errorMessage) setErrorMessage('');
+                      }}
                       required
                     />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label htmlFor="reg-gender" className="block text-[11px] font-mono uppercase text-slate-300">
+                      Gender <span className="text-mars-400">*</span>
+                    </label>
+                    <select
+                      id="reg-gender"
+                      name="gender"
+                      value={regData.gender}
+                      onChange={(e) => setRegData({ ...regData, gender: e.target.value })}
+                      className="w-full px-3 py-2.5 rounded-xl bg-space-900 border border-white/10 text-xs font-mono text-white focus:outline-none focus:border-mars-500"
+                      required
+                    >
+                      <option value="Male">Male</option>
+                      <option value="Female">Female</option>
+                      <option value="Other">Other</option>
+                      <option value="Prefer not to say">Prefer not to say</option>
+                    </select>
                   </div>
 
                   <div className="space-y-1">
@@ -1004,10 +1095,10 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
                     {loading ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        <span>Sending OTP...</span>
+                        <span>{otpEnabled ? 'Sending OTP...' : 'Validating...'}</span>
                       </>
                     ) : (
-                      'Next: Mobile Verification →'
+                      otpEnabled ? 'Next: Mobile Verification →' : 'Next: Create Password →'
                     )}
                   </button>
                 </div>
@@ -1262,7 +1353,7 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
                 <div className="flex items-center justify-between pt-2">
                   <button
                     type="button"
-                    onClick={() => setRegStep(3)}
+                    onClick={() => setRegStep(otpEnabled ? 3 : 1)}
                     className="text-xs font-mono text-slate-400 hover:text-white"
                   >
                     ← Back
@@ -1322,8 +1413,16 @@ export default function UserAuthModal({ isOpen, onClose, initialMode = 'login', 
                       <span className="text-emerald-400 font-bold">{regData.email} (Verified)</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-white/5">
+                      <span className="text-slate-400">Date of Birth:</span>
+                      <span className="text-white">{regData.dob ? formatDisplayDate(regData.dob) : 'N/A'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-white/5">
+                      <span className="text-slate-400">Gender:</span>
+                      <span className="text-white">{regData.gender || 'Not specified'}</span>
+                    </div>
+                    <div className="flex justify-between py-1 border-b border-white/5">
                       <span className="text-slate-400">Age:</span>
-                      <span className="text-white">{regData.age} Years</span>
+                      <span className="text-white">{regData.age ? `${regData.age} Years (Eligible)` : 'Eligible'}</span>
                     </div>
                     <div className="flex justify-between py-1 border-b border-white/5">
                       <span className="text-slate-400">Blood Group:</span>

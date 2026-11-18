@@ -360,13 +360,20 @@ class AppRouter {
     const pathname = rawPathname.length > 1 ? rawPathname.replace(/\/+$/, '') : rawPathname;
     req.query = Object.fromEntries(parsedUrl.searchParams.entries());
 
-    // 2. Health check endpoint
+    // 2. Health check endpoint (supports GET and HEAD for Railway/cloud healthcheck probes)
     if (pathname === '/api/health') {
+      if (req.method === 'HEAD') {
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'application/json; charset=utf-8');
+        res.end();
+        return;
+      }
       return res.status(200).json({
         status: 'UP',
         service: 'RED MISSION Medical Network API',
         environment: config.NODE_ENV,
         database: 'Relational SQLite (node:sqlite)',
+        otpEnabled: config.OTP_ENABLED,
         timestamp: new Date().toISOString()
       });
     }

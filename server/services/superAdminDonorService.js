@@ -4,6 +4,7 @@ import {
   getDonorAvailabilityStatus,
   getDonorProfileColumns,
   normalizeVerifiedDateToIstYmd,
+  resolveEffectiveAge,
   tableExists,
   MEDICAL_ELIGIBILITY_DISCLAIMER
 } from './donorAvailabilityService.js';
@@ -404,6 +405,8 @@ function buildDonorBaseSelectColumns(db) {
       u.mobile_number,
       u.email,
       u.age,
+      u.date_of_birth,
+      u.gender,
       COALESCE(NULLIF(TRIM(d.blood_group), ''), u.blood_group) AS blood_group,
       COALESCE(NULLIF(TRIM(d.city), ''), u.city) AS city,
       d.pincode,
@@ -489,13 +492,14 @@ export function getSuperAdminDonorDirectory(
       bloodGroupCounts[bg] += 1;
     }
 
+    const effectiveAge = resolveEffectiveAge(row.age, row.date_of_birth, referenceDate);
     const avail =
       bulkAvailability.get(row.user_id) ||
       evaluateDonorAvailability({
         hasDonorProfile: true,
         isActive: row.is_active === 1,
         isSuspended: row.is_suspended === 1,
-        age: row.age,
+        age: effectiveAge,
         isAvailableForEmergency: row.is_available_for_emergency === 1,
         latestVerifiedDonationDate: null,
         selfReportedLastDonationDate: row.last_donation_date,
@@ -529,7 +533,9 @@ export function getSuperAdminDonorDirectory(
       bloodGroup: bg,
       city: row.city || '',
       pincode: row.pincode || null,
-      age: row.age ?? null,
+      age: effectiveAge,
+      dateOfBirth: row.date_of_birth || null,
+      gender: row.gender || null,
       mobileNumber: row.mobile_number,
       email: row.email || null,
       hasPhoto,
@@ -821,6 +827,7 @@ export function getSuperAdminDonorDetail(db, userId, { referenceDate = null } = 
 
   const latestVerifiedDonation = verifiedDonationHistory.length > 0 ? verifiedDonationHistory[0] : null;
   const hasPhoto = Boolean(row.profile_photo_path && String(row.profile_photo_path).trim());
+  const effectiveAge = resolveEffectiveAge(row.age, row.date_of_birth, referenceDate);
 
   return {
     donor: {
@@ -828,7 +835,9 @@ export function getSuperAdminDonorDetail(db, userId, { referenceDate = null } = 
       publicReference: row.public_reference || null,
       fullName: row.full_name,
       bloodGroup: row.blood_group,
-      age: row.age ?? null,
+      age: effectiveAge,
+      dateOfBirth: row.date_of_birth || null,
+      gender: row.gender || null,
       mobileNumber: row.mobile_number,
       email: row.email || null,
       city: row.city || '',

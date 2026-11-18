@@ -103,10 +103,24 @@ async function request(endpoint, options = {}, tokenType = 'user') {
 }
 
 // ==========================================
+// AUTHENTICATION CONFIGURATION API
+// ==========================================
+export const authApi = {
+  getConfig: () => request('/auth/config', { method: 'GET' })
+};
+
+// ==========================================
 // USER AUTHENTICATION API
 // ==========================================
 export const userApi = {
-  // Multi-step Registration
+  // Direct Registration (when OTP is disabled)
+  registerDirect: (data) =>
+    request('/user/register/direct', {
+      method: 'POST',
+      body: data instanceof FormData ? data : JSON.stringify(data)
+    }),
+
+  // Multi-step Registration (preserved for full OTP restoration)
   registerStep1: (data) => 
     request('/user/register/step1', {
       method: 'POST',
@@ -138,6 +152,12 @@ export const userApi = {
   },
 
   getProfile: () => request('/user/me', { method: 'GET' }),
+
+  updateProfile: (data) =>
+    request('/user/profile', {
+      method: 'PUT',
+      body: data instanceof FormData ? data : JSON.stringify(data)
+    }),
 
   logout: async () => {
     const res = await request('/user/logout', { method: 'POST' });
@@ -234,9 +254,14 @@ export const donorApi = {
 // ADMIN AUTHENTICATION & MANAGEMENT API
 // ==========================================
 export const adminApi = {
-  // Step 1: Identifier + Password check
-  loginStep1: (identifier, password) => 
-    request('/admin/login/step1', { method: 'POST', body: JSON.stringify({ identifier, password }) }, 'admin'),
+  // Step 1: Identifier + Password check (handles direct login when OTP is disabled or triggers Step 2 Dual 2FA)
+  loginStep1: async (identifier, password) => {
+    const res = await request('/admin/login/step1', { method: 'POST', body: JSON.stringify({ identifier, password }) }, 'admin');
+    if (res.success && res.token && res.directAuth) {
+      setAdminToken(res.token);
+    }
+    return res;
+  },
 
   // Step 2: Dual OTP verification (Mobile + Email)
   loginVerifyOtps: async (preAuthToken, mobileOtp, emailOtp) => {

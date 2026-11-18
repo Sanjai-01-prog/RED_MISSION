@@ -131,7 +131,62 @@ export function setupAdminAuthRoutes(app) {
       });
     }
 
-    // Password verified! Now generate TWO SEPARATE OTPs:
+    // Password verified!
+    // If OTP_ENABLED is false, complete administrative authentication directly
+    if (!config.OTP_ENABLED) {
+      db.prepare('UPDATE admin_accounts SET failed_login_attempts = 0, lockout_until = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(admin.id);
+
+      const sessionToken = generateSecureToken(32);
+      const sessionTokenHash = crypto.createHmac('sha256', config.SESSION_SECRET).update(sessionToken).digest('hex');
+      const sessionExpiresAt = new Date(Date.now() + config.ADMIN_SESSION_MAX_HOURS * 60 * 60 * 1000).toISOString();
+
+      const nowIso = new Date().toISOString();
+      db.prepare(`
+        INSERT INTO admin_sessions (id, admin_id, session_token_hash, ip_address, user_agent, last_activity_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(sessionToken, admin.id, sessionTokenHash, clientIp, userAgent, nowIso, sessionExpiresAt);
+
+      db.prepare(`
+        INSERT INTO login_attempts (id, identifier, account_type, ip_address, user_agent, success)
+        VALUES (?, ?, 'ADMIN', ?, ?, 1)
+      `).run(`att_${crypto.randomUUID()}`, admin.username, clientIp, userAgent);
+
+      logSecurityAudit({
+        actorType: 'ADMIN',
+        actorId: admin.id,
+        action: 'ADMIN_LOGIN_SUCCESS',
+        details: { role: admin.role_id, username: admin.username, mode: 'DIRECT_AUTH_OTP_DISABLED' },
+        ipAddress: clientIp
+      });
+
+      const permissions = db.prepare(`
+        SELECT permission FROM role_permissions WHERE role_id = ?
+      `).all(admin.role_id).map(r => r.permission);
+
+      res.setHeader('Set-Cookie', [
+        `red_mission_admin_session=${sessionToken}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${config.ADMIN_SESSION_MAX_HOURS * 3600}${config.IS_PROD ? '; Secure' : ''}`
+      ]);
+
+      return res.json({
+        success: true,
+        directAuth: true,
+        message: 'Administrative authentication successful! Welcome to Medical Command.',
+        token: sessionToken,
+        admin: {
+          id: admin.id,
+          fullName: admin.full_name,
+          username: admin.username,
+          email: admin.email,
+          mobileNumber: admin.mobile_number,
+          roleId: admin.role_id,
+          roleName: admin.role_name,
+          mustChangePassword: Boolean(admin.must_change_password),
+          permissions
+        }
+      });
+    }
+
+    // Password verified! Now generate TWO SEPARATE OTPs (when OTP_ENABLED is true):
     // 1. Mobile OTP
     const isCustomOrDemo = config.SMS_PROVIDER === 'DEMO' || Boolean(config.FAST2SMS_CUSTOM_OTP);
     const rawMobileOtp = isCustomOrDemo ? generateOtp() : null;
@@ -452,6 +507,14 @@ export function setupAdminAuthRoutes(app) {
     const expiresAt = new Date(Date.now() + config.OTP_EXPIRY_MINUTES * 60 * 1000).toISOString();
 
     if (channel === 'MOBILE') {
+      if (!config.OTP_ENABLED) {
+        return res.status(400).json({
+          success: false,
+          code: 'SMS_OTP_DISABLED',
+          error: 'SMS OTP recovery is temporarily disabled. Please select the "Email Link" recovery channel or contact Super Admin.'
+        });
+      }
+
       const isCustomOrDemo = config.SMS_PROVIDER === 'DEMO' || Boolean(config.FAST2SMS_CUSTOM_OTP);
       const rawOtp = isCustomOrDemo ? generateOtp() : null;
       const { hash, salt } = rawOtp ? hashOtp(rawOtp) : { hash: 'FAST2SMS_MANAGED', salt: 'FAST2SMS_MANAGED' };

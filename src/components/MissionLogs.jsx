@@ -20,6 +20,7 @@ import {
 import { INITIAL_BLOOD_REQUESTS } from '../data/missionData';
 import { requestApi, pledgeApi, donorApi } from '../services/api';
 import { resolveDonorAvailability, formatCalendarDate, MEDICAL_COOLDOWN_NOTE } from '../utils/donorAvailability';
+import CalendarDatePicker from './common/CalendarDatePicker';
 
 export default function MissionLogs({ 
   bloodRequests, 
@@ -688,10 +689,19 @@ _(Note: You must log in or register on RED MISSION to securely confirm a pledge.
                         <option value="CRITICAL">Critical</option>
                       </select>
                     </label>
-                    <label className="text-xs text-slate-300 space-y-1.5">
-                      Required By *
-                      <input required type="datetime-local" min={getDefaultRequiredBy()} value={citizenRequestForm.requiredBy} onChange={e => updateCitizenRequestField('requiredBy', e.target.value)} className="w-full rounded-lg bg-space-850 border border-white/15 px-3 py-2.5 text-white outline-none focus:border-mars-500" />
-                    </label>
+                    <div className="space-y-1.5">
+                      <CalendarDatePicker
+                        id="citizen-required-by"
+                        name="requiredBy"
+                        label="Required By"
+                        mode="datetime"
+                        placeholder="Select required date & time"
+                        value={citizenRequestForm.requiredBy}
+                        min={getDefaultRequiredBy()}
+                        onChange={(newVal) => updateCitizenRequestField('requiredBy', newVal)}
+                        required
+                      />
+                    </div>
                     <label className="text-xs text-slate-300 space-y-1.5">
                       Contact Person *
                       <input required maxLength={120} value={citizenRequestForm.contactPerson} onChange={e => updateCitizenRequestField('contactPerson', e.target.value)} className="w-full rounded-lg bg-space-850 border border-white/15 px-3 py-2.5 text-white outline-none focus:border-mars-500" placeholder="Contact person's name" />

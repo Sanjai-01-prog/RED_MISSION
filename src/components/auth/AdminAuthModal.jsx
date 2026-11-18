@@ -117,6 +117,15 @@ export default function AdminAuthModal({ isOpen, onClose, onAuthSuccess }) {
     setLoading(false);
 
     if (res.success) {
+      if (res.directAuth || (res.token && res.admin)) {
+        setSuccessMessage('Admin credentials verified! Entering Medical Command...');
+        setTimeout(() => {
+          onAuthSuccess(res.admin, res);
+          onClose();
+        }, 600);
+        return;
+      }
+
       setPreAuthToken(res.preAuthToken);
       setMaskedPhone(res.maskedPhone);
       setMaskedEmail(res.maskedEmail);

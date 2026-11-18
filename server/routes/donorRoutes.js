@@ -16,7 +16,8 @@ import {
   getDonorAvailabilityStatus,
   getBulkDonorAvailability,
   getDonorProfileColumns,
-  tableExists
+  tableExists,
+  resolveEffectiveAge
 } from '../services/donorAvailabilityService.js';
 
 // Ensure selfie storage directory exists
@@ -122,7 +123,7 @@ function streamSelfieFile(res, filePath, mime) {
  */
 export function buildDonorProfilePayload(db, userId) {
   const donor = db.prepare(`
-    SELECT d.*, u.full_name, u.email, u.mobile_number, u.age, u.is_active, u.is_suspended
+    SELECT d.*, u.full_name, u.email, u.mobile_number, u.age, u.date_of_birth, u.gender, u.is_active, u.is_suspended
     FROM donor_profiles d
     JOIN users u ON d.user_id = u.id
     WHERE d.user_id = ?
@@ -144,6 +145,7 @@ export function buildDonorProfilePayload(db, userId) {
     };
   }
 
+  const effectiveAge = resolveEffectiveAge(donor.age, donor.date_of_birth);
   const publicRef = donor.public_reference || null;
   const hasDbPhotoPath = Boolean(donor.profile_photo_path && String(donor.profile_photo_path).trim());
   const safeFilePath = hasDbPhotoPath ? resolveSafeSelfiePath(donor.profile_photo_path) : null;
@@ -170,6 +172,9 @@ export function buildDonorProfilePayload(db, userId) {
       email: donor.email,
       mobileNumber: donor.mobile_number,
       bloodGroup: donor.blood_group,
+      age: effectiveAge,
+      dateOfBirth: donor.date_of_birth || null,
+      gender: donor.gender || null,
       city: donor.city,
       pincode: donor.pincode,
       latitude: donor.latitude,
@@ -1023,6 +1028,8 @@ export function setupDonorRoutes(app) {
           u.is_active,
           u.is_suspended,
           u.age,
+          u.date_of_birth,
+          u.gender,
           ${completedPledgesExpr} AS completed_pledges_count
         FROM donor_profiles d
         JOIN users u ON d.user_id = u.id
@@ -1175,6 +1182,8 @@ export function setupDonorRoutes(app) {
           d.created_at,
           u.full_name,
           u.age,
+          u.date_of_birth,
+          u.gender,
           u.is_active,
           u.is_suspended
         FROM donor_profiles d
@@ -1188,13 +1197,16 @@ export function setupDonorRoutes(app) {
       const donors = rows
         .map((r) => {
           const av = availabilityMap.get(r.user_id);
+          const effectiveAge = resolveEffectiveAge(r.age, r.date_of_birth);
           return {
             userId: r.user_id,
             publicReference: r.public_reference || null,
             fullName: r.full_name,
             bloodGroup: r.blood_group,
             city: r.city,
-            age: r.age,
+            age: effectiveAge,
+            dateOfBirth: r.date_of_birth || null,
+            gender: r.gender || null,
             isActive: r.is_active === 1,
             isSuspended: r.is_suspended === 1,
             isAvailableForEmergency: r.is_available_for_emergency === 1,

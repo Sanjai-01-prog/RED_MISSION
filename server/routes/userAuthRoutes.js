@@ -19,12 +19,18 @@ import { rateLimiter } from '../utils/rateLimiter.js';
 import { logSecurityAudit, logUserActivity } from '../utils/auditLogger.js';
 import { authenticateUser } from '../middleware/authMiddleware.js';
 import { validateImagePayload } from '../utils/imageValidator.js';
-import { getDonorProfileColumns } from '../services/donorAvailabilityService.js';
+import {
+  calculateAgeFromDob,
+  getDonorProfileColumns,
+  resolveEffectiveAge
+} from '../services/donorAvailabilityService.js';
 import {
   buildDonorProfilePayload,
   extractPhotoPayload,
   generatePublicDonorReference
 } from './donorRoutes.js';
+
+export const VALID_GENDERS = ['Male', 'Female', 'Other', 'Prefer not to say'];
 
 const TOKEN_HASH_REGEX = /^[a-f0-9]{64}$/;
 
@@ -183,32 +189,60 @@ function cleanupExpiredRegistrations(db) {
 export function setupUserAuthRoutes(app) {
   
   // ==========================================
-  // 1. MULTI-STEP USER REGISTRATION
+  // DIRECT USER REGISTRATION (When OTP_ENABLED is false)
+  // Atomic registration with password, photo validation, consent and terms
   // ==========================================
-
-  // Step 1: Validate donor details, mandatory photo + consent & dispatch Mobile OTP
-  app.post('/api/user/register/step1', async (req, res) => {
-    const { fullName, mobileNumber, email, age, bloodGroup, city } = req.body;
+  app.post('/api/user/register/direct', async (req, res) => {
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      age,
+      dob,
+      dateOfBirth,
+      gender,
+      bloodGroup,
+      city,
+      password,
+      confirmPassword
+    } = req.body;
     const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
 
     // Rate limiting per IP
-    const limit = rateLimiter.check(`reg_step1_${clientIp}`, 10, 10 * 60 * 1000);
+    const limit = rateLimiter.check(`reg_direct_${clientIp}`, 10, 10 * 60 * 1000);
     if (!limit.allowed) {
       return res.status(429).json({ success: false, error: limit.error });
     }
+
+    const rawDob = dob !== undefined && dob !== null && String(dob).trim() !== '' ? String(dob).trim() :
+                   dateOfBirth !== undefined && dateOfBirth !== null && String(dateOfBirth).trim() !== '' ? String(dateOfBirth).trim() : null;
 
     // Input Validation
     if (
       !String(fullName || '').trim() ||
       !String(mobileNumber || '').trim() ||
       !String(email || '').trim() ||
-      age === undefined || age === null || String(age).trim() === '' ||
+      (!rawDob && (age === undefined || age === null || String(age).trim() === '')) ||
       !String(bloodGroup || '').trim() ||
       !String(city || '').trim()
     ) {
       return res.status(400).json({
         success: false,
-        error: 'All six details are required: Full Name, Mobile Number, Email, Age, Blood Group, and City.'
+        error: 'All registration details are required: Full Name, Mobile Number, Email, Date of Birth, Blood Group, and City.'
+      });
+    }
+
+    if (!password || password.length < 8) {
+      return res.status(400).json({
+        success: false,
+        error: 'Password must be at least 8 characters long.'
+      });
+    }
+
+    if (password !== confirmPassword) {
+      return res.status(400).json({
+        success: false,
+        error: 'Passwords do not match.'
       });
     }
 
@@ -224,9 +258,353 @@ export function setupUserAuthRoutes(app) {
     // Validate 10-digit Indian mobile format
     const normalizedMobile = normalizeIndianMobile(cleanMobile);
     if (!normalizedMobile) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Please provide a valid 10-digit Indian mobile number (e.g. 9876543210).' 
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide a valid 10-digit Indian mobile number (e.g. 9876543210).'
+      });
+    }
+
+    // Per-mobile rate limit
+    const mobileLimit = rateLimiter.check(`reg_mobile_${normalizedMobile}`, 5, 10 * 60 * 1000);
+    if (!mobileLimit.allowed) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many registration attempts for this mobile number. Please wait a few minutes before trying again.'
+      });
+    }
+
+    // Validate DOB and calculate dynamic age (Asia/Kolkata)
+    let numAge = null;
+    let storedDob = null;
+    if (rawDob) {
+      const calculatedAge = calculateAgeFromDob(rawDob);
+      if (calculatedAge === null) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid date of birth (YYYY-MM-DD).'
+        });
+      }
+      if (calculatedAge === -1) {
+        return res.status(400).json({
+          success: false,
+          error: 'Date of birth cannot be in the future.'
+        });
+      }
+      if (calculatedAge < 18 || calculatedAge > 65) {
+        return res.status(400).json({
+          success: false,
+          error: 'Voluntary blood donors must be aged between 18 and 65 years.'
+        });
+      }
+      numAge = calculatedAge;
+      storedDob = rawDob;
+    } else {
+      const parsedAge = parseInt(age, 10);
+      if (isNaN(parsedAge) || parsedAge < 18 || parsedAge > 65) {
+        return res.status(400).json({
+          success: false,
+          error: 'Voluntary blood donors must be aged between 18 and 65 years.'
+        });
+      }
+      numAge = parsedAge;
+      storedDob = null;
+    }
+
+    // Validate Gender
+    let storedGender = null;
+    if (gender !== undefined && gender !== null && String(gender).trim() !== '') {
+      const trimmedGender = String(gender).trim();
+      if (!VALID_GENDERS.includes(trimmedGender)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please select a valid gender option (Male, Female, Other, Prefer not to say).'
+        });
+      }
+      storedGender = trimmedGender;
+    }
+
+    const validBloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+    if (!validBloodGroups.includes(String(bloodGroup).trim())) {
+      return res.status(400).json({ success: false, error: 'Please select a valid blood group.' });
+    }
+
+    // Mandatory Terms & Conditions acceptance
+    const rawTermsConsent = req.body.termsAccepted ?? req.body.termsConsent ?? req.body.termsAndConditionsAccepted;
+    if (!isTruthyConsent(rawTermsConsent)) {
+      return res.status(400).json({
+        success: false,
+        code: 'TERMS_ACCEPTANCE_REQUIRED',
+        error: 'You must review and accept the RED MISSION Terms & Conditions to register.'
+      });
+    }
+
+    const termsVersion = String(req.body.termsVersion || '1.0.0').trim();
+    const privacyPolicyVersion = String(req.body.privacyPolicyVersion || req.body.privacyVersion || '1.0.0').trim();
+
+    // Mandatory Donor Profile Photo & Consent validation
+    const rawConsent = req.body.photoConsent ?? req.body.selfieConsent ?? req.body.selfieConsentGiven;
+    if (!isTruthyConsent(rawConsent)) {
+      return res.status(400).json({
+        success: false,
+        code: 'PHOTO_CONSENT_REQUIRED',
+        error: 'Explicit consent for capturing and securely storing your donor verification photograph is required to register.'
+      });
+    }
+
+    const rawPhotoPayload = extractPhotoPayload(req);
+    if (!rawPhotoPayload) {
+      return res.status(400).json({
+        success: false,
+        code: 'DONOR_PHOTO_REQUIRED',
+        error: 'A genuine donor profile photograph is required before proceeding with registration.'
+      });
+    }
+
+    const imgResult = validateImagePayload(rawPhotoPayload, {
+      maxSize: config.MAX_SELFIE_SIZE_BYTES,
+      requireDimensions: true
+    });
+    if (!imgResult.valid) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_IMAGE',
+        error: imgResult.error
+      });
+    }
+
+    const db = getDatabase();
+    const existingUser = db.prepare(`
+      SELECT email, mobile_number FROM users
+      WHERE email = ? OR mobile_number = ?
+    `).get(cleanEmail, normalizedMobile);
+
+    if (existingUser) {
+      if (existingUser.email === cleanEmail) {
+        return res.status(409).json({
+          success: false,
+          error: 'An account is already registered with this email address. Please log in or reset your password.'
+        });
+      }
+      if (existingUser.mobile_number === normalizedMobile) {
+        return res.status(409).json({
+          success: false,
+          error: 'An account is already registered with this mobile number. Please log in or reset your password.'
+        });
+      }
+    }
+
+    const userId = `usr_${crypto.randomUUID()}`;
+    const { hash, salt } = hashPassword(password);
+
+    // Promote validated photo into config.SELFIE_STORAGE_DIR
+    const storageDir = config.SELFIE_STORAGE_DIR;
+    if (!fs.existsSync(storageDir)) {
+      fs.mkdirSync(storageDir, { recursive: true });
+    }
+    const randomHex = crypto.randomBytes(12).toString('hex');
+    const finalPhotoFilename = `selfie_${userId}_${randomHex}${imgResult.ext}`;
+    const tempPromoPath = path.join(storageDir, `temp_${userId}_${randomHex}${imgResult.ext}`);
+    const finalPhotoPath = path.join(storageDir, finalPhotoFilename);
+
+    try {
+      fs.writeFileSync(tempPromoPath, imgResult.buffer);
+      fs.renameSync(tempPromoPath, finalPhotoPath);
+    } catch (fsErr) {
+      try { if (fs.existsSync(tempPromoPath)) fs.unlinkSync(tempPromoPath); } catch {}
+      try { if (fs.existsSync(finalPhotoPath)) fs.unlinkSync(finalPhotoPath); } catch {}
+      console.error('[DIRECT REGISTRATION PHOTO ERROR]', fsErr);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to persist donor photograph securely. Please try again.'
+      });
+    }
+
+    let txActive = false;
+    try {
+      const donorCols = getDonorProfileColumns(db);
+      const hasPublicRefCol = donorCols.includes('public_reference');
+      const hasDirConsentCol = donorCols.includes('consent_directory_listing');
+
+      db.exec('BEGIN IMMEDIATE TRANSACTION;');
+      txActive = true;
+
+      // 1. Insert User
+      db.prepare(`
+        INSERT INTO users (
+          id, full_name, mobile_number, email, age, date_of_birth, gender, blood_group, city,
+          password_hash, password_salt, is_active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+      `).run(
+        userId,
+        String(fullName).trim(),
+        normalizedMobile,
+        cleanEmail,
+        numAge,
+        storedDob,
+        storedGender,
+        String(bloodGroup).trim(),
+        String(city).trim(),
+        hash,
+        salt
+      );
+
+      // 2. Insert Verification record: Do not falsely mark unverified contacts as verified!
+      // In direct OTP-free registration, mobile_verified and email_verified are 0 with null timestamps.
+      db.prepare(`
+        INSERT INTO user_verifications (
+          id, user_id, mobile_verified, mobile_verified_at, email_verified, email_verified_at
+        ) VALUES (?, ?, 0, NULL, 0, NULL)
+      `).run(`vrf_${crypto.randomUUID()}`, userId);
+
+      // 3. Build dynamic 1:1 donor_profiles insert
+      const insertCols = [
+        'user_id', 'blood_group', 'city', 'pincode',
+        'is_available_for_emergency', 'consent_emergency_alerts',
+        'last_donation_date', 'total_donations_count',
+        'profile_photo_path', 'profile_photo_mime', 'profile_photo_size_bytes'
+      ];
+      const insertVals = [
+        userId, String(bloodGroup).trim(), String(city).trim(), null,
+        1, 1,
+        null, 0,
+        finalPhotoFilename, imgResult.mime, imgResult.sizeBytes
+      ];
+
+      const colSql = [...insertCols];
+      const valSql = insertVals.map(() => '?');
+
+      colSql.push('profile_photo_updated_at');
+      valSql.push('CURRENT_TIMESTAMP');
+
+      colSql.push('selfie_consent_given');
+      valSql.push('1');
+
+      colSql.push('selfie_consent_at');
+      valSql.push('CURRENT_TIMESTAMP');
+
+      colSql.push('is_photo_public');
+      valSql.push('0');
+
+      if (hasDirConsentCol) {
+        colSql.push('consent_directory_listing');
+        valSql.push('1');
+      }
+
+      if (hasPublicRefCol) {
+        colSql.push('public_reference');
+        valSql.push('?');
+        insertVals.push(generatePublicDonorReference());
+      }
+
+      db.prepare(`
+        INSERT INTO donor_profiles (${colSql.join(', ')})
+        VALUES (${valSql.join(', ')})
+      `).run(...insertVals);
+
+      // 4. Record User Consents
+      db.prepare(`
+        INSERT INTO user_consents (
+          id, user_id, terms_accepted, terms_version, terms_accepted_at,
+          privacy_accepted, privacy_version, privacy_accepted_at
+        ) VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP)
+      `).run(`cns_${crypto.randomUUID()}`, userId, termsVersion, privacyPolicyVersion);
+
+      // 5. Commit
+      db.exec('COMMIT;');
+      txActive = false;
+
+      logSecurityAudit({
+        actorType: 'USER',
+        actorId: userId,
+        action: 'USER_REGISTERED_DIRECT',
+        details: { bloodGroup, city, dob: storedDob, gender: storedGender, termsVersion, privacyPolicyVersion, photoConsent: true },
+        ipAddress: clientIp
+      });
+
+      logUserActivity({
+        userId,
+        eventType: 'ACCOUNT_CREATED',
+        description: 'Account successfully registered via direct registration mode.',
+        ipAddress: clientIp,
+        userAgent: req.headers['user-agent']
+      });
+
+      return res.status(201).json({
+        success: true,
+        message: 'Account created successfully! You can now log in.',
+        userId
+      });
+    } catch (err) {
+      if (txActive) {
+        try { db.exec('ROLLBACK;'); } catch {}
+      }
+      try { if (fs.existsSync(finalPhotoPath)) fs.unlinkSync(finalPhotoPath); } catch {}
+      console.error('[DIRECT REGISTRATION DB ERROR]', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to complete registration. Please try again.'
+      });
+    }
+  });
+
+  // ==========================================
+  // 1. MULTI-STEP USER REGISTRATION
+  // ==========================================
+
+  // Step 1: Validate donor details, mandatory photo + consent & dispatch Mobile OTP
+  app.post('/api/user/register/step1', async (req, res) => {
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      age,
+      dob,
+      dateOfBirth,
+      gender,
+      bloodGroup,
+      city
+    } = req.body;
+    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+
+    // Rate limiting per IP
+    const limit = rateLimiter.check(`reg_step1_${clientIp}`, 10, 10 * 60 * 1000);
+    if (!limit.allowed) {
+      return res.status(429).json({ success: false, error: limit.error });
+    }
+
+    const rawDob = dob !== undefined && dob !== null && String(dob).trim() !== '' ? String(dob).trim() :
+                   dateOfBirth !== undefined && dateOfBirth !== null && String(dateOfBirth).trim() !== '' ? String(dateOfBirth).trim() : null;
+
+    // Input Validation
+    if (
+      !String(fullName || '').trim() ||
+      !String(mobileNumber || '').trim() ||
+      !String(email || '').trim() ||
+      (!rawDob && (age === undefined || age === null || String(age).trim() === '')) ||
+      !String(bloodGroup || '').trim() ||
+      !String(city || '').trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        error: 'All registration details are required: Full Name, Mobile Number, Email, Date of Birth, Blood Group, and City.'
+      });
+    }
+
+    const cleanMobile = mobileNumber.replace(/\s+/g, '');
+    const cleanEmail = email.trim().toLowerCase();
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ success: false, error: 'Please provide a valid email address.' });
+    }
+
+    // Validate 10-digit Indian mobile format
+    const normalizedMobile = normalizeIndianMobile(cleanMobile);
+    if (!normalizedMobile) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide a valid 10-digit Indian mobile number (e.g. 9876543210).'
       });
     }
 
@@ -239,13 +617,54 @@ export function setupUserAuthRoutes(app) {
       });
     }
 
-    // Validate age (must be at least 18 for blood donation)
-    const numAge = parseInt(age, 10);
-    if (isNaN(numAge) || numAge < 18 || numAge > 65) {
-      return res.status(400).json({
-        success: false,
-        error: 'Voluntary blood donors must be aged between 18 and 65 years.'
-      });
+    // Validate DOB and calculate dynamic age (Asia/Kolkata)
+    let numAge = null;
+    let storedDob = null;
+    if (rawDob) {
+      const calculatedAge = calculateAgeFromDob(rawDob);
+      if (calculatedAge === null) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid date of birth (YYYY-MM-DD).'
+        });
+      }
+      if (calculatedAge === -1) {
+        return res.status(400).json({
+          success: false,
+          error: 'Date of birth cannot be in the future.'
+        });
+      }
+      if (calculatedAge < 18 || calculatedAge > 65) {
+        return res.status(400).json({
+          success: false,
+          error: 'Voluntary blood donors must be aged between 18 and 65 years.'
+        });
+      }
+      numAge = calculatedAge;
+      storedDob = rawDob;
+    } else {
+      const parsedAge = parseInt(age, 10);
+      if (isNaN(parsedAge) || parsedAge < 18 || parsedAge > 65) {
+        return res.status(400).json({
+          success: false,
+          error: 'Voluntary blood donors must be aged between 18 and 65 years.'
+        });
+      }
+      numAge = parsedAge;
+      storedDob = null;
+    }
+
+    // Validate Gender
+    let storedGender = null;
+    if (gender !== undefined && gender !== null && String(gender).trim() !== '') {
+      const trimmedGender = String(gender).trim();
+      if (!VALID_GENDERS.includes(trimmedGender)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please select a valid gender option (Male, Female, Other, Prefer not to say).'
+        });
+      }
+      storedGender = trimmedGender;
     }
 
     const validBloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
@@ -300,7 +719,7 @@ export function setupUserAuthRoutes(app) {
     // Check for duplicate mobile or email
     const db = getDatabase();
     const existingUser = db.prepare(`
-      SELECT email, mobile_number FROM users 
+      SELECT email, mobile_number FROM users
       WHERE email = ? OR mobile_number = ?
     `).get(cleanEmail, normalizedMobile);
 
@@ -367,20 +786,22 @@ export function setupUserAuthRoutes(app) {
 
       db.prepare(`
         INSERT INTO pending_user_registrations (
-          token_hash, full_name, mobile_number, email, age, blood_group, city,
+          token_hash, full_name, mobile_number, email, age, date_of_birth, gender, blood_group, city,
           mobile_verified, email_verified,
           mobile_otp_hash, mobile_otp_salt, mobile_otp_expires_at,
           mobile_attempts, email_attempts,
           expires_at,
           terms_accepted, terms_version, terms_accepted_at,
           privacy_accepted, privacy_version, privacy_accepted_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 0, 0, ?, 1, ?, CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, 0, 0, ?, 1, ?, CURRENT_TIMESTAMP, 1, ?, CURRENT_TIMESTAMP)
       `).run(
         tokenHash,
         String(fullName).trim(),
         normalizedMobile,
         cleanEmail,
         numAge,
+        storedDob,
+        storedGender,
         String(bloodGroup).trim(),
         String(city).trim(),
         hash,
@@ -722,15 +1143,17 @@ export function setupUserAuthRoutes(app) {
       // Insert User
       db.prepare(`
         INSERT INTO users (
-          id, full_name, mobile_number, email, age, blood_group, city,
+          id, full_name, mobile_number, email, age, date_of_birth, gender, blood_group, city,
           password_hash, password_salt, is_active
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
       `).run(
         userId,
         pending.full_name,
         pending.mobile_number,
         pending.email,
         pending.age,
+        pending.date_of_birth || null,
+        pending.gender || null,
         pending.blood_group,
         pending.city,
         hash,
@@ -1201,6 +1624,7 @@ export function setupUserAuthRoutes(app) {
     ]);
 
     const donorPayload = buildDonorProfilePayload(db, user.id);
+    const requiresProfileCompletion = Boolean(!user.date_of_birth || !user.gender);
 
     res.json({
       success: true,
@@ -1213,8 +1637,12 @@ export function setupUserAuthRoutes(app) {
         mobileNumber: user.mobile_number,
         bloodGroup: user.blood_group,
         city: user.city,
-        age: user.age
+        age: resolveEffectiveAge(user.age, user.date_of_birth),
+        dateOfBirth: user.date_of_birth || null,
+        gender: user.gender || null,
+        requiresProfileCompletion
       },
+      requiresProfileCompletion,
       isDonor: donorPayload.isDonor,
       hasDonorProfile: donorPayload.hasDonorProfile,
       hasPhoto: donorPayload.hasPhoto,
@@ -1234,10 +1662,20 @@ export function setupUserAuthRoutes(app) {
   app.get('/api/user/me', authenticateUser, (req, res) => {
     const db = getDatabase();
     const donorPayload = buildDonorProfilePayload(db, req.user.id);
+    const requiresProfileCompletion = Boolean(!req.user.date_of_birth || !req.user.gender);
 
     res.json({
       success: true,
-      user: req.user,
+      user: {
+        ...req.user,
+        fullName: req.user.full_name || req.user.fullName,
+        mobileNumber: req.user.mobile_number || req.user.mobileNumber,
+        bloodGroup: req.user.blood_group || req.user.bloodGroup,
+        dateOfBirth: req.user.date_of_birth || req.user.dateOfBirth || null,
+        gender: req.user.gender || null,
+        requiresProfileCompletion
+      },
+      requiresProfileCompletion,
       isDonor: donorPayload.isDonor,
       hasDonorProfile: donorPayload.hasDonorProfile,
       hasPhoto: donorPayload.hasPhoto,
@@ -1248,6 +1686,392 @@ export function setupUserAuthRoutes(app) {
       availability: donorPayload.availability,
       donorProfile: donorPayload.donor
     });
+  });
+
+  // ==========================================
+  // USER PROFILE EDITING (PUT /api/user/profile)
+  // ==========================================
+  app.put('/api/user/profile', authenticateUser, async (req, res) => {
+    const clientIp = req.ip || req.socket.remoteAddress || '127.0.0.1';
+    const userAgent = req.headers['user-agent'] || 'Unknown Browser';
+
+    // Rate limiting per user: max 10 updates per 5 minutes
+    const limit = rateLimiter.check(`prof_update_${req.user.id}`, 10, 5 * 60 * 1000);
+    if (!limit.allowed) {
+      return res.status(429).json({ success: false, error: limit.error });
+    }
+
+    // 1. Strict Ownership Enforcement & Privilege Escalation Guard
+    // IDOR check: if an ID is passed in body, it MUST match authenticated user ID
+    if (req.body.id && req.body.id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized profile update attempt. You can only modify your own profile.'
+      });
+    }
+    if (req.body.userId && req.body.userId !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        error: 'Unauthorized profile update attempt. You can only modify your own profile.'
+      });
+    }
+
+    // Forbidden privilege/security fields guard
+    const forbiddenFields = [
+      'role', 'roles', 'isAdmin', 'is_admin', 'is_super_admin',
+      'isSuspended', 'is_suspended', 'isActive', 'is_active',
+      'password_hash', 'password_salt', 'requires_password_change',
+      'permissions', 'email_verified', 'mobile_verified'
+    ];
+    for (const key of forbiddenFields) {
+      if (req.body[key] !== undefined) {
+        return res.status(403).json({
+          success: false,
+          error: `Modifying security field '${key}' is strictly forbidden.`
+        });
+      }
+    }
+
+    const db = getDatabase();
+    const currentUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+    if (!currentUser) {
+      return res.status(404).json({ success: false, error: 'User account not found.' });
+    }
+
+    const {
+      fullName,
+      mobileNumber,
+      email,
+      dob,
+      dateOfBirth,
+      gender,
+      bloodGroup,
+      city,
+      pincode
+    } = req.body;
+
+    // 2. CONTACT SECURITY GUARD
+    // When OTP_ENABLED=false, never mark changed mobile/email as verified.
+    // Do not replace a trusted password-recovery contact with an unverified address.
+    // If safe pending-contact verification is not supported, block mobile/email changes.
+    const requestedMobile = mobileNumber !== undefined ? String(mobileNumber).replace(/\s+/g, '') : null;
+    const normalizedMobile = requestedMobile ? normalizeIndianMobile(requestedMobile) : null;
+    if (requestedMobile && !normalizedMobile) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide a valid 10-digit Indian mobile number.'
+      });
+    }
+
+    const requestedEmail = email !== undefined ? String(email).trim().toLowerCase() : null;
+    if (requestedEmail) {
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(requestedEmail)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid email address.'
+        });
+      }
+    }
+
+    const mobileChanged = normalizedMobile && normalizedMobile !== currentUser.mobile_number;
+    const emailChanged = requestedEmail && requestedEmail !== currentUser.email;
+
+    if (mobileChanged || emailChanged) {
+      if (!config.OTP_ENABLED) {
+        return res.status(400).json({
+          success: false,
+          code: 'CONTACT_UPDATE_OTP_REQUIRED',
+          error: 'Email and mobile number updates require two-factor OTP verification, which is currently disabled. Please contact Medical Command administration to update your trusted recovery channels.'
+        });
+      }
+      return res.status(400).json({
+        success: false,
+        code: 'CONTACT_UPDATE_VERIFICATION_REQUIRED',
+        error: 'Updating email or mobile number requires two-factor verification.'
+      });
+    }
+
+    // 3. Field Validations
+    let finalFullName = currentUser.full_name;
+    if (fullName !== undefined) {
+      const trimmed = String(fullName).trim();
+      if (!trimmed || trimmed.length < 2 || trimmed.length > 100) {
+        return res.status(400).json({
+          success: false,
+          error: 'Full Name must be between 2 and 100 characters.'
+        });
+      }
+      finalFullName = trimmed;
+    }
+
+    let finalBloodGroup = currentUser.blood_group;
+    if (bloodGroup !== undefined) {
+      const trimmedBg = String(bloodGroup).trim();
+      const validBloodGroups = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
+      if (!validBloodGroups.includes(trimmedBg)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please select a valid blood group.'
+        });
+      }
+      finalBloodGroup = trimmedBg;
+    }
+
+    let finalCity = currentUser.city;
+    if (city !== undefined) {
+      const trimmedCity = String(city).trim();
+      if (!trimmedCity || trimmedCity.length < 2 || trimmedCity.length > 100) {
+        return res.status(400).json({
+          success: false,
+          error: 'City must be between 2 and 100 characters.'
+        });
+      }
+      finalCity = trimmedCity;
+    }
+
+    let finalPincode = null;
+    const currentDonor = db.prepare('SELECT pincode FROM donor_profiles WHERE user_id = ?').get(req.user.id);
+    if (currentDonor) {
+      finalPincode = currentDonor.pincode;
+    }
+    if (pincode !== undefined) {
+      const trimmedPin = String(pincode || '').trim();
+      if (trimmedPin) {
+        if (!/^\d{6}$/.test(trimmedPin)) {
+          return res.status(400).json({
+            success: false,
+            error: 'PIN code must be exactly 6 digits.'
+          });
+        }
+        finalPincode = trimmedPin;
+      } else {
+        finalPincode = null;
+      }
+    }
+
+    let finalDob = currentUser.date_of_birth;
+    let finalAge = currentUser.age;
+    const rawDob = dob !== undefined ? dob : dateOfBirth;
+    if (rawDob !== undefined && rawDob !== null && String(rawDob).trim() !== '') {
+      const trimmedDob = String(rawDob).trim();
+      const calculatedAge = calculateAgeFromDob(trimmedDob);
+      if (calculatedAge === null) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please provide a valid date of birth (YYYY-MM-DD).'
+        });
+      }
+      if (calculatedAge === -1) {
+        return res.status(400).json({
+          success: false,
+          error: 'Date of birth cannot be in the future.'
+        });
+      }
+      if (calculatedAge < 18 || calculatedAge > 65) {
+        return res.status(400).json({
+          success: false,
+          error: 'Voluntary blood donors must be aged between 18 and 65 years.'
+        });
+      }
+      finalDob = trimmedDob;
+      finalAge = calculatedAge;
+    }
+
+    let finalGender = currentUser.gender;
+    if (gender !== undefined && gender !== null && String(gender).trim() !== '') {
+      const trimmedGender = String(gender).trim();
+      if (!VALID_GENDERS.includes(trimmedGender)) {
+        return res.status(400).json({
+          success: false,
+          error: 'Please select a valid gender option (Male, Female, Other, Prefer not to say).'
+        });
+      }
+      finalGender = trimmedGender;
+    }
+
+    // 4. Photo Upload Handling (if provided)
+    let newPhotoFilename = null;
+    let newPhotoMime = null;
+    let newPhotoSize = null;
+    const rawPhotoPayload = extractPhotoPayload(req);
+    if (rawPhotoPayload) {
+      const imgResult = validateImagePayload(rawPhotoPayload, {
+        maxSize: config.MAX_SELFIE_SIZE_BYTES,
+        requireDimensions: true
+      });
+      if (!imgResult.valid) {
+        return res.status(400).json({
+          success: false,
+          code: 'INVALID_IMAGE',
+          error: imgResult.error
+        });
+      }
+
+      const storageDir = config.SELFIE_STORAGE_DIR;
+      if (!fs.existsSync(storageDir)) {
+        fs.mkdirSync(storageDir, { recursive: true });
+      }
+      const randomHex = crypto.randomBytes(12).toString('hex');
+      newPhotoFilename = `selfie_${req.user.id}_${randomHex}${imgResult.ext}`;
+      const tempPath = path.join(storageDir, `temp_${req.user.id}_${randomHex}${imgResult.ext}`);
+      const finalPath = path.join(storageDir, newPhotoFilename);
+
+      try {
+        fs.writeFileSync(tempPath, imgResult.buffer);
+        fs.renameSync(tempPath, finalPath);
+        newPhotoMime = imgResult.mime;
+        newPhotoSize = imgResult.sizeBytes;
+      } catch (fsErr) {
+        try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch {}
+        try { if (fs.existsSync(finalPath)) fs.unlinkSync(finalPath); } catch {}
+        console.error('[PROFILE PHOTO UPLOAD ERROR]', fsErr);
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to persist profile photograph. Please try again.'
+        });
+      }
+    }
+
+    // 5. Database Transaction: Update users and sync donor_profiles
+    let txActive = false;
+    try {
+      db.exec('BEGIN IMMEDIATE TRANSACTION;');
+      txActive = true;
+
+      // Update users table
+      db.prepare(`
+        UPDATE users
+        SET full_name = ?,
+            blood_group = ?,
+            city = ?,
+            date_of_birth = ?,
+            gender = ?,
+            age = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(
+        finalFullName,
+        finalBloodGroup,
+        finalCity,
+        finalDob,
+        finalGender,
+        finalAge,
+        req.user.id
+      );
+
+      // Sync donor_profiles table
+      const donorCols = getDonorProfileColumns(db);
+      const donorExists = db.prepare('SELECT user_id, profile_photo_path FROM donor_profiles WHERE user_id = ?').get(req.user.id);
+
+      if (donorExists) {
+        let updateDonorSql = `
+          UPDATE donor_profiles
+          SET blood_group = ?,
+              city = ?,
+              pincode = ?,
+              updated_at = CURRENT_TIMESTAMP
+        `;
+        const updateParams = [finalBloodGroup, finalCity, finalPincode];
+
+        if (newPhotoFilename) {
+          updateDonorSql += `,
+            profile_photo_path = ?,
+            profile_photo_mime = ?,
+            profile_photo_size_bytes = ?,
+            profile_photo_updated_at = CURRENT_TIMESTAMP
+          `;
+          updateParams.push(newPhotoFilename, newPhotoMime, newPhotoSize);
+        }
+
+        updateDonorSql += ' WHERE user_id = ?';
+        updateParams.push(req.user.id);
+
+        db.prepare(updateDonorSql).run(...updateParams);
+      } else {
+        // Create donor_profiles entry if missing
+        db.prepare(`
+          INSERT INTO donor_profiles (
+            user_id, blood_group, city, pincode,
+            is_available_for_emergency, consent_emergency_alerts,
+            last_donation_date, total_donations_count,
+            profile_photo_path, profile_photo_mime, profile_photo_size_bytes,
+            profile_photo_updated_at, selfie_consent_given, selfie_consent_at,
+            is_photo_public
+          ) VALUES (?, ?, ?, ?, 1, 1, NULL, 0, ?, ?, ?, CURRENT_TIMESTAMP, 1, CURRENT_TIMESTAMP, 0)
+        `).run(
+          req.user.id,
+          finalBloodGroup,
+          finalCity,
+          finalPincode,
+          newPhotoFilename,
+          newPhotoMime,
+          newPhotoSize
+        );
+      }
+
+      db.exec('COMMIT;');
+      txActive = false;
+
+      // 6. Security Audit & User Activity Logging
+      logSecurityAudit({
+        actorType: 'USER',
+        actorId: req.user.id,
+        action: 'USER_PROFILE_UPDATED',
+        details: {
+          fullNameChanged: finalFullName !== currentUser.full_name,
+          bloodGroupChanged: finalBloodGroup !== currentUser.blood_group,
+          cityChanged: finalCity !== currentUser.city,
+          dobChanged: finalDob !== currentUser.date_of_birth,
+          genderChanged: finalGender !== currentUser.gender,
+          photoUploaded: Boolean(newPhotoFilename)
+        },
+        ipAddress: clientIp
+      });
+
+      logUserActivity({
+        userId: req.user.id,
+        eventType: 'PROFILE_UPDATED',
+        description: 'Profile details updated successfully.',
+        ipAddress: clientIp,
+        userAgent
+      });
+
+      // 7. Fetch updated user & donor profile payload
+      const updatedUserRow = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+      const effectiveAge = resolveEffectiveAge(updatedUserRow.age, updatedUserRow.date_of_birth);
+      const donorPayload = buildDonorProfilePayload(db, req.user.id);
+      const requiresProfileCompletion = Boolean(!updatedUserRow.date_of_birth || !updatedUserRow.gender);
+
+      return res.json({
+        success: true,
+        message: 'Profile updated successfully.',
+        user: {
+          id: updatedUserRow.id,
+          fullName: updatedUserRow.full_name,
+          mobileNumber: updatedUserRow.mobile_number,
+          email: updatedUserRow.email,
+          bloodGroup: updatedUserRow.blood_group,
+          city: updatedUserRow.city,
+          pincode: finalPincode,
+          age: effectiveAge,
+          dateOfBirth: updatedUserRow.date_of_birth || null,
+          gender: updatedUserRow.gender || null,
+          requiresProfileCompletion
+        },
+        requiresProfileCompletion,
+        donorProfile: donorPayload.donor
+      });
+    } catch (err) {
+      if (txActive) {
+        try { db.exec('ROLLBACK;'); } catch {}
+      }
+      console.error('[PROFILE UPDATE ERROR]', err);
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to update profile. Please try again.'
+      });
+    }
   });
 
   app.get('/api/user/consent', authenticateUser, (req, res) => {

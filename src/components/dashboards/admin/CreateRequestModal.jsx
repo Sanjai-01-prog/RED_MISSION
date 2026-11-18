@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { X, Heart, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { requestApi } from '../../../services/api';
+import CalendarDatePicker from '../../common/CalendarDatePicker';
 
 const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'];
 const URGENCY_LEVELS = [
@@ -320,17 +321,16 @@ export default function CreateRequestModal({
 
             {/* Required By Date & Time */}
             <div className="sm:col-span-2">
-              <label className="block text-xs font-mono text-slate-300 mb-1">
-                Required By Date &amp; Time <span className="text-mars-400">*</span>
-              </label>
-              <input
-                type="datetime-local"
+              <CalendarDatePicker
+                id="required-by"
                 name="requiredBy"
-                min={toLocalDateTimeInputValue(Date.now() + 5 * 60 * 1000)}
+                label="Required By Date & Time"
+                mode="datetime"
+                placeholder="Select required date & time"
                 value={formData.requiredBy}
-                onChange={handleChange}
+                min={toLocalDateTimeInputValue(Date.now() + 5 * 60 * 1000)}
+                onChange={(newVal) => setFormData(prev => ({ ...prev, requiredBy: newVal }))}
                 required
-                className="w-full px-3 py-2 rounded-xl bg-space-950 border border-white/10 text-white text-xs font-mono focus:border-mars-500 focus:outline-none"
               />
             </div>
 

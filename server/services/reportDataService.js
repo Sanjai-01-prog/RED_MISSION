@@ -8,6 +8,7 @@
 
 import crypto from 'node:crypto';
 import { getDatabase } from '../database/connection.js';
+import { resolveEffectiveAge } from './donorAvailabilityService.js';
 
 /**
  * Mask sensitive mobile number (e.g., +91 98****1234)
@@ -114,6 +115,8 @@ export function getMonthlyDonationReportData(db, { month, year, maskSensitive = 
       -- Donor profile & user information
       u.full_name as donor_name,
       u.age as donor_age,
+      u.date_of_birth as donor_dob,
+      u.gender as donor_gender,
       u.blood_group as donor_blood_group,
       u.city as donor_city,
       u.mobile_number as donor_mobile,
@@ -227,7 +230,10 @@ export function getMonthlyDonationReportData(db, { month, year, maskSensitive = 
       
       // Donor Information
       donorName: r.donor_name || 'Anonymous Donor',
-      donorAge: r.donor_age ? `${r.donor_age} yrs` : 'Not Available',
+      donorAge: (() => {
+        const effAge = resolveEffectiveAge(r.donor_age, r.donor_dob);
+        return effAge !== null ? `${effAge} yrs` : 'Not Available';
+      })(),
       donorBloodGroup: r.donor_blood_group || 'Not Available',
       donorCity: r.donor_city || 'Not Available',
       donor_public_reference: r.donor_public_reference ?? null,

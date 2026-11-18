@@ -21,6 +21,7 @@ import CertificateVerificationModal from './components/CertificateVerificationMo
 import RoleSelectionModal from './components/auth/RoleSelectionModal';
 import UserAuthModal from './components/auth/UserAuthModal';
 import AdminAuthModal from './components/auth/AdminAuthModal';
+import MandatoryProfileCompletionModal from './components/auth/MandatoryProfileCompletionModal';
 import AdminManagementPanel from './components/admin/AdminManagementPanel';
 import DonorRegistrationModal from './components/donor/DonorRegistrationModal';
 import UserDashboard from './components/dashboards/user/UserDashboard';
@@ -77,14 +78,20 @@ export default function App() {
         try {
           const userRes = await userApi.getProfile();
           if (userRes.success && userRes.user) {
+            const u = userRes.user;
+            const dobVal = u.dateOfBirth || u.date_of_birth || null;
+            const genderVal = u.gender || null;
             setCurrentUser({
-              id: userRes.user.id,
-              fullName: userRes.user.full_name,
-              email: userRes.user.email,
-              mobileNumber: userRes.user.mobile_number,
-              bloodGroup: userRes.user.blood_group,
-              city: userRes.user.city,
-              age: userRes.user.age,
+              id: u.id,
+              fullName: u.fullName || u.full_name,
+              email: u.email,
+              mobileNumber: u.mobileNumber || u.mobile_number,
+              bloodGroup: u.bloodGroup || u.blood_group,
+              city: u.city,
+              age: u.age,
+              dateOfBirth: dobVal,
+              gender: genderVal,
+              requiresProfileCompletion: Boolean(userRes.requiresProfileCompletion || !dobVal || !genderVal),
               isDonor: Boolean(userRes.isDonor),
               needsDonorCompletion: Boolean(userRes.needsDonorCompletion),
               needsDonorPhotoCompletion: Boolean(userRes.needsDonorPhotoCompletion),
@@ -217,8 +224,18 @@ export default function App() {
   };
 
   const handleUserAuthSuccess = (user, authRes = null) => {
+    const userDob = authRes?.user?.dateOfBirth || user?.dateOfBirth || user?.date_of_birth || null;
+    const userGender = authRes?.user?.gender || user?.gender || null;
+    const reqCompletion = Boolean(authRes?.requiresProfileCompletion ?? (!userDob || !userGender));
+
     const updatedUser = {
       ...user,
+      fullName: user?.fullName || user?.full_name || authRes?.user?.fullName,
+      mobileNumber: user?.mobileNumber || user?.mobile_number || authRes?.user?.mobileNumber,
+      email: user?.email || authRes?.user?.email,
+      dateOfBirth: userDob,
+      gender: userGender,
+      requiresProfileCompletion: reqCompletion,
       isDonor: authRes ? Boolean(authRes.isDonor) : user?.isDonor,
       needsDonorCompletion: authRes ? Boolean(authRes.needsDonorCompletion) : user?.needsDonorCompletion,
       needsDonorPhotoCompletion: authRes ? Boolean(authRes.needsDonorPhotoCompletion) : user?.needsDonorPhotoCompletion,
@@ -242,6 +259,17 @@ export default function App() {
     } else if (window.location.hash === '#user-dashboard') {
       setCurrentView('user-dashboard');
     }
+  };
+
+  const handleMandatoryProfileComplete = (completedUser) => {
+    setCurrentUser(prev => ({
+      ...prev,
+      ...completedUser,
+      dateOfBirth: completedUser?.dateOfBirth || completedUser?.date_of_birth || prev?.dateOfBirth,
+      gender: completedUser?.gender || prev?.gender,
+      age: completedUser?.age !== undefined ? completedUser.age : prev?.age,
+      requiresProfileCompletion: false
+    }));
   };
 
   const handleAdminAuthSuccess = (admin) => {
@@ -530,6 +558,14 @@ export default function App() {
         onClose={() => setIsUserAuthOpen(false)}
         initialMode={userAuthMode}
         onAuthSuccess={handleUserAuthSuccess}
+      />
+
+      {/* Mandatory Profile Completion for Legacy Accounts */}
+      <MandatoryProfileCompletionModal
+        isOpen={Boolean(currentUser && (currentUser.requiresProfileCompletion || !currentUser.dateOfBirth || !currentUser.gender))}
+        currentUser={currentUser}
+        onComplete={handleMandatoryProfileComplete}
+        onLogout={handleUserLogout}
       />
 
       <AdminAuthModal

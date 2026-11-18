@@ -1083,6 +1083,8 @@ export function setupEmergencyRequestRoutes(app, deps = {}) {
           d.is_available_for_emergency,
           u.full_name,
           u.age,
+          u.date_of_birth,
+          u.gender,
           u.is_active,
           u.is_suspended
         FROM donor_profiles d
@@ -1303,7 +1305,9 @@ export function setupEmergencyRequestRoutes(app, deps = {}) {
             u.full_name,
             u.is_active,
             u.is_suspended,
-            u.age
+            u.age,
+            u.date_of_birth,
+            u.gender
           FROM donor_profiles d
           JOIN users u ON d.user_id = u.id
           WHERE d.user_id = ? ${hasPublicRefCol ? 'OR UPPER(d.public_reference) = UPPER(?)' : ''}

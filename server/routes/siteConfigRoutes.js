@@ -51,6 +51,7 @@ export async function getPersistentLaunchConfig(db = getDatabase()) {
     isProduction,
     timerActive,
     launchTimestampUtc,
+    otpEnabled: config.OTP_ENABLED,
     serverNowUtc: TemporalImpl.Now.instant().toString()
   };
 }

@@ -249,6 +249,8 @@ export function setupDonationProofRoutes(app) {
           u.is_active,
           u.is_suspended,
           u.age,
+          u.date_of_birth,
+          u.gender,
           d.user_id as donor_profile_user_id,
           d.is_available_for_emergency,
           d.last_donation_date,

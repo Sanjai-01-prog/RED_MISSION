@@ -54,7 +54,9 @@ export const config = {
   INVITATION_EXPIRY_DAYS: 7,
 
   // SMS & Email Providers
-  SMS_PROVIDER: process.env.SMS_PROVIDER || 'DEMO', // 'DEMO' | 'FAST2SMS' | 'TWILIO' | 'AWS_SNS'
+  // Reversible Feature Flag: OTP Verification System (Defaults to false unless explicitly enabled)
+  OTP_ENABLED: process.env.OTP_ENABLED === 'true',
+  SMS_PROVIDER: process.env.SMS_PROVIDER || 'DEMO', // 'DEMO' | 'FAST2SMS' | 'TWILIO' | 'AWS_SNS' | 'DISABLED'
   EMAIL_PROVIDER: process.env.EMAIL_PROVIDER || 'DEMO', // 'DEMO' | 'SMTP' | 'SENDGRID'
   
   // Fast2SMS Configuration (Smart OTP for Indian Mobile Numbers)
@@ -183,14 +185,20 @@ export function validateSuperAdminConfig({
 
 /**
  * Validates SMS Provider configuration.
- * - In production: rejects DEMO provider, and requires provider credentials.
+ * - If OTP_ENABLED is false, relaxes check so server starts cleanly without external credentials.
+ * - In production mode with OTP enabled: rejects DEMO provider, and requires provider credentials.
  */
-export function validateSmsConfig({ isProd = config.IS_PROD, provider = config.SMS_PROVIDER } = {}) {
+export function validateSmsConfig({ isProd = config.IS_PROD, provider = config.SMS_PROVIDER, otpEnabled = config.OTP_ENABLED } = {}) {
+  if (!otpEnabled) {
+    console.log('[RED MISSION SECURITY] OTP verification is temporarily disabled (OTP_ENABLED=false). Running in direct authentication mode.');
+    return { valid: true, otpDisabled: true };
+  }
+
   if (isProd) {
     if (provider === 'DEMO') {
       throw new Error(
         '[FATAL SECURITY CONFIGURATION] In production mode (NODE_ENV=production), SMS_PROVIDER cannot be set to "DEMO". ' +
-        'Please configure a production-ready SMS gateway such as FAST2SMS.'
+        'Please configure a production-ready SMS gateway such as FAST2SMS, or set OTP_ENABLED=false for direct authentication mode.'
       );
     }
     if (provider === 'FAST2SMS') {
